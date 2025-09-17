@@ -69,7 +69,10 @@ app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
     const { obj } = await getFile();
 
     if (!obj[hwid]) {
-      return res.json({ status: "Not Found" });
+      return res.json({ 
+        status: "Not Found",
+        license: false             // ⬅️ kalau tidak ada dianggap false
+      });
     }
 
     const entry = obj[hwid][0];
@@ -79,15 +82,26 @@ app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
     const now = new Date();
 
     if (expDate < now) {
-      return res.json({ status: false, name: entry.Name, expired: expiredStr });
+      return res.json({ 
+        status: "Expired",
+        license: false,            // ⬅️ expired = false
+        name: entry.Name,
+        expired: expiredStr
+      });
     } else {
-      return res.json({ status: true, name: entry.Name, expired: expiredStr });
+      return res.json({ 
+        status: "Aktif",
+        license: true,              // ⬅️ masih aktif = true
+        name: entry.Name,
+        expired: expiredStr
+      });
     }
 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Endpoint: tambah / update license
 app.post("/api/activate", requireApiKey, async (req, res) => {
