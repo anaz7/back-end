@@ -177,5 +177,43 @@ app.post("/api/deactivate", requireApiKey, async (req, res) => {
   }
 });
 
+// === Update license ===
+app.post("/api/edit", requireApiKey, async (req, res) => {
+  try {
+    const { hwid, name, host, expired, verify } = req.body;
+    if (!hwid) return res.status(400).json({ error: "HWID is required" });
+
+    const { obj, sha } = await getFile();
+    if (!obj[hwid]) return res.status(404).json({ error: "HWID not found" });
+
+    obj[hwid][0].Name = name || obj[hwid][0].Name;
+    obj[hwid][0].Host = host || obj[hwid][0].Host;
+    obj[hwid][0].Expired = expired || obj[hwid][0].Expired;
+    obj[hwid][0].Verify = verify ?? obj[hwid][0].Verify;
+
+    await saveFile(obj, sha);
+    res.json({ status: "Success", message: `✅ HWID ${hwid} updated` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// === Delete license ===
+app.post("/api/delete", requireApiKey, async (req, res) => {
+  try {
+    const { hwid } = req.body;
+    if (!hwid) return res.status(400).json({ error: "HWID is required" });
+
+    const { obj, sha } = await getFile();
+    if (!obj[hwid]) return res.status(404).json({ error: "HWID not found" });
+
+    delete obj[hwid];
+    await saveFile(obj, sha);
+    res.json({ status: "Success", message: `🗑️ HWID ${hwid} deleted` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`✅ Activation backend running on port ${port}`));
