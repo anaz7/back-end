@@ -1,19 +1,18 @@
 import express from "express";
-import fetch from "node-fetch";
 import bodyParser from "body-parser";
+import fetch from "node-fetch";
 
 const app = express();
 app.use(bodyParser.json());
 
-// === ENV Variables (diisi di Render Dashboard) ===
-const GITHUB_TOKEN   = process.env.GITHUB_TOKEN;
-const GITHUB_OWNER   = process.env.GITHUB_OWNER;
-const GITHUB_REPO    = process.env.GITHUB_REPO;
-const GITHUB_PATH    = process.env.GITHUB_PATH || "licenses.json";
-const GITHUB_BRANCH  = process.env.GITHUB_BRANCH || "master";
-const ADMIN_API_KEY  = process.env.ADMIN_API_KEY;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_OWNER = process.env.GITHUB_OWNER;
+const GITHUB_REPO = process.env.GITHUB_REPO;
+const GITHUB_PATH = process.env.GITHUB_PATH || "licenses.json";
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
-// Middleware: cek API key
+// === Middleware for API key authentication ===
 function requireApiKey(req, res, next) {
   const key = req.headers["x-api-key"];
   if (!key || key !== ADMIN_API_KEY) {
@@ -22,56 +21,50 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-// Ambil file JSON dari GitHub
+// === Helper: Fetch file from GitHub ===
 async function getFile() {
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_PATH)}?ref=${GITHUB_BRANCH}`;
-  const resp = await fetch(url, {
-    headers: {
-      "Authorization": `token ${GITHUB_TOKEN}`,
-      "User-Agent": "ActivationBackend"
-    }
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_PATH}?ref=${GITHUB_BRANCH}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `token ${GITHUB_TOKEN}` }
   });
-  if (!resp.ok) throw new Error(`GitHub GET failed ${resp.status}`);
-  const j = await resp.json();
-  const content = Buffer.from(j.content, "base64").toString("utf8");
-  return { sha: j.sha, obj: JSON.parse(content) };
+  if (!res.ok) throw new Error(`GitHub fetch failed: ${res.statusText}`);
+  const data = await res.json();
+  const content = Buffer.from(data.content, "base64").toString("utf8");
+  return { obj: JSON.parse(content), sha: data.sha };
 }
 
-// Update file JSON di GitHub
-async function updateFile(newObj, sha, message = "Update licenses.json") {
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(GITHUB_PATH)}`;
-  const body = {
-    message,
-    content: Buffer.from(JSON.stringify(newObj, null, 2)).toString("base64"),
-    sha,
-    branch: GITHUB_BRANCH
-  };
-  const resp = await fetch(url, {
+// === Helper: Save file back to GitHub ===
+async function saveFile(obj, sha) {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_PATH}`;
+  const content = Buffer.from(JSON.stringify(obj, null, 2)).toString("base64");
+  const res = await fetch(url, {
     method: "PUT",
     headers: {
-      "Authorization": `token ${GITHUB_TOKEN}`,
-      "User-Agent": "ActivationBackend",
+      Authorization: `token ${GITHUB_TOKEN}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      message: "Update licenses.json",
+      content,
+      sha,
+      branch: GITHUB_BRANCH
+    })
   });
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`GitHub PUT failed ${resp.status}: ${txt}`);
-  }
-  return await resp.json();
+  if (!res.ok) throw new Error(`GitHub save failed: ${res.statusText}`);
+  return res.json();
 }
 
-// Endpoint: cek license by HWID
+// === Check license by HWID ===
 app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
   try {
     const hwid = req.params.hwid;
     const { obj } = await getFile();
 
     if (!obj[hwid]) {
-      return res.json({ 
+      return res.json({
         status: "Not Found",
-        license: false             // ⬅️ kalau tidak ada dianggap false
+        license: false,
+        message: "❌ HWID not registered or not activated"
       });
     }
 
@@ -81,61 +74,108 @@ app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
     const expDate = new Date(year, month - 1, day);
     const now = new Date();
 
-    if (expDate < now) {
-      return res.json({ 
-        status: "Expired",
-        license: false,            // ⬅️ expired = false
+    if (!entry.Login) {
+      return res.json({
+        status: "Deactivated",
+        license: false,
         name: entry.Name,
-        expired: expiredStr
-      });
-    } else {
-      return res.json({ 
-        status: "Aktif",
-        license: true,              // ⬅️ masih aktif = true
-        name: entry.Name,
-        expired: expiredStr
+        expired: expiredStr,
+        message: "❌ License has been deactivated by admin"
       });
     }
+
+    if (expDate < now) {
+      return res.json({
+        status: "Expired",
+        license: false,
+        name: entry.Name,
+        expired: expiredStr,
+        message: "❌ License has expired, please renew"
+      });
+    }
+
+    return res.json({
+      status: "Active",
+      license: true,
+      name: entry.Name,
+      expired: expiredStr,
+      message: "✅ License is valid, application can run"
+    });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-// Endpoint: tambah / update license
+// === Activate license ===
 app.post("/api/activate", requireApiKey, async (req, res) => {
   try {
     const { hwid, host, name, expired, verify } = req.body;
-    if (!hwid || !host || !name || !expired) {
-      return res.status(400).json({ error: "Missing fields (hwid, host, name, expired)" });
+
+    if (!hwid || !expired) {
+      return res.status(400).json({ error: "HWID and Expired are required" });
     }
 
-    const { sha, obj } = await getFile();
+    const { obj, sha } = await getFile();
 
-    obj[hwid] = [
-      {
-        Host: host,
-        HwID: hwid,
-        Login: true,
-        Name: name,
-        Verify: verify || 1,
-        Expired: expired
-      }
-    ];
+    const newEntry = [{
+      Host: host || "Unknown-PC",
+      HwID: hwid,
+      Login: true,
+      Name: name || "Unknown User",
+      Verify: verify || 1,
+      Expired: expired
+    }];
 
-    const result = await updateFile(obj, sha, `Activate or update ${hwid}`);
-    res.json({ status: "Updated", hwid, github: result.commit.sha });
+    obj[hwid] = newEntry;
+    await saveFile(obj, sha);
+
+    res.json({
+      status: "Success",
+      license: true,
+      message: `✅ License for HWID ${hwid} has been activated`,
+      hwid,
+      expired
+    });
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Root endpoint
-app.get("/", (req, res) => {
-  res.send("✅ Activation backend is running on Render 🚀");
+// === Deactivate license ===
+app.post("/api/deactivate", requireApiKey, async (req, res) => {
+  try {
+    const { hwid } = req.body;
+
+    if (!hwid) {
+      return res.status(400).json({ error: "HWID is required" });
+    }
+
+    const { obj, sha } = await getFile();
+
+    if (!obj[hwid]) {
+      return res.status(404).json({
+        status: "Not Found",
+        license: false,
+        message: `❌ HWID ${hwid} not found`
+      });
+    }
+
+    obj[hwid][0].Login = false;
+    await saveFile(obj, sha);
+
+    res.json({
+      status: "Success",
+      license: false,
+      message: `❌ License for HWID ${hwid} has been deactivated`,
+      hwid
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Jalankan server
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, () => console.log(`✅ Activation backend running on port ${port}`));
