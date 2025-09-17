@@ -9,7 +9,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 const GITHUB_PATH = process.env.GITHUB_PATH || "licenses.json";
-const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "master";
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
 // === Middleware for API key authentication ===
@@ -20,6 +20,11 @@ function requireApiKey(req, res, next) {
   }
   next();
 }
+
+// === Root endpoint (for testing server online) ===
+app.get("/", (req, res) => {
+  res.send("✅ Backend is running");
+});
 
 // === Helper: Fetch file from GitHub ===
 async function getFile() {
@@ -54,6 +59,16 @@ async function saveFile(obj, sha) {
   return res.json();
 }
 
+// === Get all licenses ===
+app.get("/api/all", requireApiKey, async (req, res) => {
+  try {
+    const { obj } = await getFile();
+    res.json(obj);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // === Check license by HWID ===
 app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
   try {
@@ -69,7 +84,7 @@ app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
     }
 
     const entry = obj[hwid][0];
-    const expiredStr = entry.Expired; // format dd-MM-yyyy
+    const expiredStr = entry.Expired;
     const [day, month, year] = expiredStr.split("-").map(Number);
     const expDate = new Date(year, month - 1, day);
     const now = new Date();
