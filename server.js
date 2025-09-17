@@ -79,9 +79,9 @@ app.get("/api/license/:hwid", requireApiKey, async (req, res) => {
     const now = new Date();
 
     if (expDate < now) {
-      return res.json({ status: "Expired", name: entry.Name, expired: expiredStr });
+      return res.json({ status: false, name: entry.Name, expired: expiredStr });
     } else {
-      return res.json({ status: "Aktif", name: entry.Name, expired: expiredStr });
+      return res.json({ status: true, name: entry.Name, expired: expiredStr });
     }
 
   } catch (err) {
